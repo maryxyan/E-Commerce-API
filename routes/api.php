@@ -40,5 +40,7 @@ Route::middleware(['auth:sanctum'])->group(function () {
     Route::middleware(['role:admin'])->group(function () {
         Route::get('/orders', [OrderController::class, 'index']);
         Route::patch('/orders/{order}/status', [OrderController::class, 'updateStatus']);
+        Route::get('/orders/stats', [OrderController::class, 'orderStats']);
+
     });
 });

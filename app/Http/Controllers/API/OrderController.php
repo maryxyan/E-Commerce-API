@@ -1,3 +1,5 @@
+<?php
+
 namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\Controller;
@@ -48,15 +50,22 @@ class OrderController extends Controller
     public function store(Request $request)
     {
         $validated = $request->validate([
-            'shipping_address' => 'required|string',
-            'payment_method' => 'required|string',
-            'items' => 'required|array',
+            'items' => 'required|array|min:1',
             'items.*.product_id' => 'required|exists:products,id',
             'items.*.quantity' => 'required|integer|min:1',
+            'shipping_address' => 'required|string',
+            'payment_method' => 'required|string'
         ]);
 
         try {
             return DB::transaction(function () use ($request, $validated) {
+             // Check stock availability
+             foreach ($validated['items'] as $item) {
+                $product = Product::find($item['product_id']);
+                if ($product->stock < $item['quantity']) {
+                    throw new \Exception("Insufficient stock for product: {$product->name}");
+                }
+            }    
                 $totalPrice = 0;
                 $items = [];
 
@@ -89,12 +98,25 @@ class OrderController extends Controller
                 $order = Order::create([
                     'user_id' => $request->user()->id,
                     'total_price' => $totalPrice,
-                    'status' => 'pending',
+                    'status' => Order::STATUS_PENDING,
                     'shipping_address' => $validated['shipping_address'],
                     'payment_method' => $validated['payment_method'],
                     'payment_status' => 'pending'
                 ]);
-
+                //Create order items and reduce stock
+                foreach($validated['items'] as $item) {
+                    $product = Product::findOrFail($item['product_id']);
+                    $order->items()->create([
+                        'product_id' => $product->id,
+                        'quantity' => $item['quantity'],
+                        'price' => $product->price
+                    ]);
+                    // Reduce stock
+                    $prduct->decrement('stock_quantity', $item['quantity']);
+                }
+                $order->total_price = $order->calculateTotal();
+                $order->save();
+                
                 // Save order items
                 foreach ($items as $item) {
                     $order->items()->create($item);
@@ -106,6 +128,7 @@ class OrderController extends Controller
             return response()->json(['message' => $e->getMessage()], 400);
         }
     }
+    
 
     /**
      * Display the specified order.
@@ -122,12 +145,18 @@ class OrderController extends Controller
     public function updateStatus(Request $request, Order $order)
     {
         $validated = $request->validate([
-            'status' => 'required|in:pending,processing,shipped,delivered,cancelled',
-            'payment_status' => 'sometimes|required|in:pending,paid,failed,refunded'
+            'status' => 'required|in:' . implode(',', [
+                Order::STATUS_PENDING,
+                Order::STATUS_PROCESSING,
+                Order::STATUS_COMPLETED,
+                Order::STATUS_CANCELLED
+            ])
         ]);
 
-        $order->update($validated);
+        $order->status = $validated['status'];
+        $order->save();
 
-        return new OrderResource($order->load('items.product'));
+        return $order;
     }
 }
+
